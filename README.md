@@ -58,7 +58,7 @@ Requires: Solana CLI (config'd to devnet with funded wallet), Anchor 1.0+,
 Node 22+, Rust 1.95+.
 
 ```bash
-git clone https://github.com/<you>/onleash
+git clone https://github.com/ELOMEC/OnLeash.git
 cd onleash
 anchor build
 anchor deploy             # ~1.7 SOL on devnet

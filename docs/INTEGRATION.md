@@ -42,7 +42,7 @@ authority over the budget's funds.
 ### 1. Get the generated client
 
 ```bash
-git clone https://github.com/<you>/onleash
+git clone https://github.com/ELOMEC/OnLeash.git
 cd onleash && anchor build && npm install && npm run codama
 ```
 
