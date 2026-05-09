@@ -1,0 +1,21 @@
+[toolchain]
+package_manager = "yarn"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+onleash = "6M5XU4icTbfym3y6JxNNff2sXPiJTnKfBEWJr9D6XRr"
+
+[programs.devnet]
+onleash = "6M5XU4icTbfym3y6JxNNff2sXPiJTnKfBEWJr9D6XRr"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id-devnet.json"
+
+[scripts]
+test = "cargo test"
+
+[hooks]
