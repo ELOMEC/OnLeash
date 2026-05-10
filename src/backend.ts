@@ -1,22 +1,33 @@
+import { PrivyClient } from "@privy-io/server-auth";
 import {
   address,
-  appendTransactionMessageInstructions,
   createKeyPairSignerFromBytes,
+  createNoopSigner,
   createSolanaRpc,
   createSolanaRpcSubscriptions,
-  createTransactionMessage,
-  getSignatureFromTransaction,
-  pipe,
   sendAndConfirmTransactionFactory,
-  setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
-  signTransactionMessageWithSigners,
   type Address,
 } from "@solana/kit";
 import {
   findAssociatedTokenPda,
   TOKEN_PROGRAM_ADDRESS,
 } from "@solana-program/token";
+import {
+  Connection,
+  PublicKey,
+  TransactionMessage,
+  VersionedTransaction,
+  type TransactionInstruction,
+} from "@solana/web3.js";
+import {
+  appendTransactionMessageInstructions,
+  createTransactionMessage,
+  getSignatureFromTransaction,
+  pipe,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+} from "@solana/kit";
 import cors from "cors";
 import express, { type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
@@ -28,32 +39,13 @@ import {
   getExecutePaymentInstructionAsync,
 } from "./generated";
 
-// === DELEGATE PROVIDER ===
-// This backend currently creates ed25519 keypairs locally via Node crypto and
-// holds raw bytes in process memory. For production, swap to Privy Server
-// Wallets (MPC-backed, no raw keys ever held by backend):
-//
-//   import { PrivyClient } from "@privy-io/server-auth";
-//   const privy = new PrivyClient(process.env.PRIVY_APP_ID!, process.env.PRIVY_APP_SECRET!);
-//   const wallet = await privy.walletApi.createWallet({ chainType: "solana" });
-//   // store wallet.id; sign via privy.walletApi.signTransaction(walletId, tx)
-//
-// Required env vars: PRIVY_APP_ID, PRIVY_APP_SECRET
-// Trade-offs: Privy server wallets are MPC-secured and remove key-management
-// burden from the backend at the cost of per-wallet fees. Local mode remains
-// useful for tests and local dev.
-
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const RPC_WS = process.env.RPC_WS ?? "wss://api.devnet.solana.com";
-// Service keypair loading — prefer SERVICE_KEYPAIR env (JSON array of 64 bytes,
-// same format as Solana CLI keypair files) for hosted envs like Railway.
-// Fall back to SERVICE_KEYPAIR_PATH for local dev.
 const SERVICE_KEYPAIR_ENV = process.env.SERVICE_KEYPAIR;
 const SERVICE_KEYPAIR_PATH =
   process.env.SERVICE_KEYPAIR_PATH ??
   `${process.env.HOME}/.config/solana/id-devnet.json`;
 const PORT = Number(process.env.PORT ?? 3000);
-// Comma-separated origins permitted to call this API. Set to "*" to allow any.
 const CORS_ORIGINS = (
   process.env.CORS_ORIGINS ??
   "http://localhost:3000,https://onleash.io,https://www.onleash.io,https://app.onleash.io"
@@ -62,6 +54,24 @@ const CORS_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 
+// Privy Server Wallets — when both creds are set, delegates are minted via
+// Privy's MPC infrastructure and their walletId is what we persist instead of
+// raw key material. The service keypair still pays fees locally.
+const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
+const PRIVY_APP_SECRET = process.env.PRIVY_APP_SECRET;
+// CAIP-2 chain ID Privy expects when broadcasting. Devnet is the default
+// since that's what the program is deployed on.
+const PRIVY_SOLANA_CAIP2 =
+  (process.env.PRIVY_SOLANA_CAIP2 as
+    | "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
+    | "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+    | "solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z") ??
+  "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+const privy =
+  PRIVY_APP_ID && PRIVY_APP_SECRET
+    ? new PrivyClient(PRIVY_APP_ID, PRIVY_APP_SECRET)
+    : null;
+
 const rpc = createSolanaRpc(RPC_URL);
 const rpcSubscriptions = createSolanaRpcSubscriptions(RPC_WS);
 const sendAndConfirm = sendAndConfirmTransactionFactory({
@@ -69,8 +79,14 @@ const sendAndConfirm = sendAndConfirmTransactionFactory({
   rpcSubscriptions,
 });
 
+// Two flavors of delegate keypair backing. Local mode is for dev / when Privy
+// isn't configured; Privy mode delegates key management to their MPC service.
+type LocalDelegate = { kind: "local"; keyBytes: Uint8Array };
+type PrivyDelegate = { kind: "privy"; walletId: string };
+type DelegateBacking = LocalDelegate | PrivyDelegate;
+
 type AgentRecord = {
-  delegateKeyBytes: Uint8Array;
+  delegate: DelegateBacking;
   delegateAddress: Address;
   ownerAddress?: Address;
   mintAddress?: Address;
@@ -91,22 +107,22 @@ function generateLocalDelegateKeyBytes(): Uint8Array {
 }
 
 async function createDelegate(): Promise<{
-  keyBytes: Uint8Array;
+  backing: DelegateBacking;
   address: Address;
 }> {
-  // TODO(privy): if PRIVY_APP_ID + PRIVY_APP_SECRET are set, replace with:
-  //   const wallet = await privy.walletApi.createWallet({ chainType: "solana" });
-  //   return { keyBytes: new Uint8Array(0), address: wallet.address as Address };
-  // Then store wallet.id on the AgentRecord and use it during signing.
+  if (privy) {
+    const wallet = await privy.walletApi.createWallet({ chainType: "solana" });
+    return {
+      backing: { kind: "privy", walletId: wallet.id },
+      address: wallet.address as Address,
+    };
+  }
   const keyBytes = generateLocalDelegateKeyBytes();
   const signer = await createKeyPairSignerFromBytes(keyBytes);
-  return { keyBytes, address: signer.address };
-}
-
-async function loadDelegateSigner(record: AgentRecord) {
-  // TODO(privy): if record has privyWalletId, return a Privy-backed signer:
-  //   return privy.walletApi.getSolanaSigner(record.privyWalletId);
-  return createKeyPairSignerFromBytes(record.delegateKeyBytes);
+  return {
+    backing: { kind: "local", keyBytes },
+    address: signer.address,
+  };
 }
 
 let serviceSignerCache: Awaited<
@@ -140,6 +156,26 @@ async function loadServiceSigner() {
   return serviceSignerCache;
 }
 
+// AccountRole bit flags from @solana/kit: 1 = writable, 2 = signer. The web3.js
+// equivalent uses two booleans, so we translate here when handing instructions
+// off to the Privy SDK (which speaks the v1 types).
+type CodamaInstruction = {
+  programAddress: string;
+  accounts: ReadonlyArray<{ address: string; role: number }>;
+  data: ArrayLike<number> & { length: number };
+};
+function codamaToWeb3(ix: CodamaInstruction): TransactionInstruction {
+  return {
+    programId: new PublicKey(ix.programAddress),
+    keys: ix.accounts.map((a) => ({
+      pubkey: new PublicKey(a.address),
+      isSigner: (a.role & 2) !== 0,
+      isWritable: (a.role & 1) !== 0,
+    })),
+    data: Buffer.from(Uint8Array.from(ix.data)),
+  } as TransactionInstruction;
+}
+
 const app = express();
 app.use(
   cors({
@@ -150,7 +186,12 @@ app.use(
 app.use(express.json());
 
 app.get("/health", (_req: Request, res: Response) => {
-  res.json({ status: "ok", rpc: RPC_URL, agents: agents.size });
+  res.json({
+    status: "ok",
+    rpc: RPC_URL,
+    agents: agents.size,
+    delegateMode: privy ? "privy" : "local",
+  });
 });
 
 app.post("/agents", async (req: Request, res: Response) => {
@@ -159,10 +200,9 @@ app.post("/agents", async (req: Request, res: Response) => {
     const ownerAddress = body.ownerAddress;
     const mintAddress = body.mintAddress;
     const id = randomUUID();
-    const { keyBytes: delegateKeyBytes, address: delegateAddress } =
-      await createDelegate();
+    const { backing, address: delegateAddress } = await createDelegate();
     agents.set(id, {
-      delegateKeyBytes,
+      delegate: backing,
       delegateAddress,
       ownerAddress:
         typeof ownerAddress === "string" ? address(ownerAddress) : undefined,
@@ -170,10 +210,7 @@ app.post("/agents", async (req: Request, res: Response) => {
         typeof mintAddress === "string" ? address(mintAddress) : undefined,
       createdAt: Date.now(),
     });
-    res.status(201).json({
-      id,
-      delegateAddress,
-    });
+    res.status(201).json({ id, delegateAddress });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err) });
@@ -246,18 +283,17 @@ app.post("/agents/:id/pay", async (req: Request, res: Response) => {
       (typeof amount !== "string" && typeof amount !== "number")
     ) {
       res.status(400).json({
-        error: "missing fields: ownerAddress, mintAddress, recipientAta, amount",
+        error:
+          "missing fields: ownerAddress, mintAddress, recipientAta, amount",
       });
       return;
     }
 
-    const delegate = await loadDelegateSigner(agent);
     const ownerAddr = address(ownerAddress);
     const mintAddr = address(mintAddress);
-
     const [agentBudget] = await findAgentBudgetPda({
       owner: ownerAddr,
-      delegate: delegate.address,
+      delegate: agent.delegateAddress,
     });
     const [budgetAta] = await findAssociatedTokenPda({
       mint: mintAddr,
@@ -265,6 +301,74 @@ app.post("/agents/:id/pay", async (req: Request, res: Response) => {
       tokenProgram: TOKEN_PROGRAM_ADDRESS,
     });
 
+    if (agent.delegate.kind === "privy") {
+      // Privy path: build instruction with NoopSigner placeholder for the
+      // delegate, build VersionedTransaction with @solana/web3.js, partial-sign
+      // as the fee payer locally, then hand off to Privy to add the delegate
+      // signature and broadcast.
+      if (!privy) {
+        throw new Error("Privy delegate stored but PRIVY client unavailable");
+      }
+      const noopDelegate = createNoopSigner(agent.delegateAddress);
+      const payIxCodama = await getExecutePaymentInstructionAsync({
+        delegate: noopDelegate,
+        agentBudget,
+        mint: mintAddr,
+        budgetAta,
+        recipientAta: address(recipientAta),
+        amount: BigInt(amount),
+      });
+      const web3Ix = codamaToWeb3({
+        programAddress: payIxCodama.programAddress,
+        accounts: payIxCodama.accounts.map((a) => ({
+          address: a.address,
+          role: a.role,
+        })),
+        data: payIxCodama.data as unknown as Uint8Array,
+      });
+
+      const serviceSigner = await loadServiceSigner();
+      const connection = new Connection(RPC_URL, "confirmed");
+      const { blockhash } = await connection.getLatestBlockhash();
+      const message = new TransactionMessage({
+        payerKey: new PublicKey(serviceSigner.address),
+        recentBlockhash: blockhash,
+        instructions: [web3Ix],
+      }).compileToV0Message();
+      const tx = new VersionedTransaction(message);
+
+      // Sign as the fee payer locally. We use @solana/web3.js's secret-key
+      // signing path by constructing a Keypair from the same 64-byte bundle
+      // the service signer already holds.
+      const serviceKeyBytes = SERVICE_KEYPAIR_ENV
+        ? parseKeypairJson(SERVICE_KEYPAIR_ENV, "SERVICE_KEYPAIR env")
+        : parseKeypairJson(
+            readFileSync(SERVICE_KEYPAIR_PATH, "utf-8"),
+            SERVICE_KEYPAIR_PATH
+          );
+      const { Keypair } = await import("@solana/web3.js");
+      const serviceKp = Keypair.fromSecretKey(serviceKeyBytes);
+      tx.sign([serviceKp]);
+
+      const { hash } = await privy.walletApi.solana.signAndSendTransaction({
+        walletId: agent.delegate.walletId,
+        caip2: PRIVY_SOLANA_CAIP2,
+        transaction: tx,
+      });
+
+      res.json({
+        signature: hash,
+        agentBudget,
+        delegateAddress: agent.delegateAddress,
+      });
+      return;
+    }
+
+    // Local path: same as before — KeyPairSigner signs as the delegate, the
+    // service signer pays fees, both via @solana/kit's sign-and-send pipeline.
+    const delegate = await createKeyPairSignerFromBytes(
+      agent.delegate.keyBytes
+    );
     const payIx = await getExecutePaymentInstructionAsync({
       delegate,
       agentBudget,
@@ -289,7 +393,7 @@ app.post("/agents/:id/pay", async (req: Request, res: Response) => {
     res.json({
       signature: sig,
       agentBudget,
-      delegateAddress: delegate.address,
+      delegateAddress: agent.delegateAddress,
     });
   } catch (err) {
     console.error(err);
@@ -310,8 +414,8 @@ app.listen(PORT, () => {
   console.log(`  CORS origins:    ${CORS_ORIGINS.join(", ")}`);
   console.log(
     `  Delegate mode:   ${
-      process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
-        ? "PRIVY_* set but Privy provider not wired — using local fallback"
+      privy
+        ? `privy server wallets (${PRIVY_SOLANA_CAIP2})`
         : "local (Node crypto ed25519, in-memory)"
     }`
   );
