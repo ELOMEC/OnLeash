@@ -1,0 +1,15 @@
+node_modules
+target
+.anchor
+test-ledger
+.git
+.DS_Store
+frontend
+programs
+tests
+migrations
+docs
+app
+.surfpool
+.yarn
+*.md
