@@ -56,7 +56,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 // Comma-separated origins permitted to call this API. Set to "*" to allow any.
 const CORS_ORIGINS = (
   process.env.CORS_ORIGINS ??
-  "http://localhost:3000,https://onleash.io,https://app.onleash.io"
+  "http://localhost:3000,https://onleash.io,https://www.onleash.io,https://app.onleash.io"
 )
   .split(",")
   .map((s) => s.trim())
