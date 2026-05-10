@@ -198,6 +198,7 @@ app.get("/agents/:id", async (req: Request, res: Response) => {
         const acc = await fetchAgentBudget(rpc, agentBudget);
         budget = {
           address: agentBudget,
+          mint: acc.data.mint,
           totalAllowance: acc.data.totalAllowance.toString(),
           spentTotal: acc.data.spentTotal.toString(),
           dailyLimit: acc.data.dailyLimit.toString(),

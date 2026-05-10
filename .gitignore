@@ -10,3 +10,4 @@ test-ledger
 .env.local
 .env.*.local
 .next
+*.tsbuildinfo

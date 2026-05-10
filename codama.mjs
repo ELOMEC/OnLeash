@@ -7,11 +7,15 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const idlPath = resolve(__dirname, "target/idl/onleash.json");
-const outDir = resolve(__dirname, "src/generated");
+const outDirs = [
+  resolve(__dirname, "src/generated"),
+  resolve(__dirname, "frontend/lib/onleash-program"),
+];
 
 const idl = JSON.parse(readFileSync(idlPath, "utf-8"));
 const codama = createFromRoot(rootNodeFromAnchor(idl));
 
-codama.accept(renderVisitor(outDir, { formatCode: false }));
-
-console.log(`✓ Generated client at ${outDir}`);
+for (const outDir of outDirs) {
+  codama.accept(renderVisitor(outDir, { formatCode: false }));
+  console.log(`✓ Generated client at ${outDir}`);
+}

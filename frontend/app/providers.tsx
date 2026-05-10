@@ -34,6 +34,14 @@ export function Providers({ children }: { children: ReactNode }) {
         externalWallets: {
           solana: { connectors: toSolanaWalletConnectors() },
         },
+        solanaClusters: [
+          {
+            name: "devnet",
+            rpcUrl:
+              process.env.NEXT_PUBLIC_RPC_URL ??
+              "https://api.devnet.solana.com",
+          },
+        ],
         loginMethods: ["email", "google", "apple", "wallet"],
         appearance: {
           accentColor: "#7c3aed",
