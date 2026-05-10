@@ -3,6 +3,7 @@
 import { usePrivy, useSolanaWallets } from "@privy-io/react-auth";
 import { useCallback, useState } from "react";
 
+import { BudgetControls } from "./components/BudgetControls";
 import { InitializeBudgetForm } from "./components/InitializeBudgetForm";
 import { TestPayForm } from "./components/TestPayForm";
 
@@ -172,13 +173,22 @@ export default function Page() {
                     )}
 
                     {expanded === a.id && ownerWallet && a.budget && (
-                      <TestPayForm
-                        agentId={a.id}
-                        ownerAddress={ownerWallet.address}
-                        mintAddress={a.budget.mint}
-                        perTxLimit={a.budget.perTxLimit}
-                        onSuccess={() => refreshAgent(a.id)}
-                      />
+                      <>
+                        <TestPayForm
+                          agentId={a.id}
+                          ownerAddress={ownerWallet.address}
+                          mintAddress={a.budget.mint}
+                          perTxLimit={a.budget.perTxLimit}
+                          onSuccess={() => refreshAgent(a.id)}
+                        />
+                        <BudgetControls
+                          ownerAddress={ownerWallet.address}
+                          budgetAddress={a.budget.address}
+                          mintAddress={a.budget.mint}
+                          paused={a.budget.paused}
+                          onSuccess={() => refreshAgent(a.id)}
+                        />
+                      </>
                     )}
                   </li>
                 ))}
