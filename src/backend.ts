@@ -44,6 +44,10 @@ import {
 
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 const RPC_WS = process.env.RPC_WS ?? "wss://api.devnet.solana.com";
+// Service keypair loading — prefer SERVICE_KEYPAIR env (JSON array of 64 bytes,
+// same format as Solana CLI keypair files) for hosted envs like Railway.
+// Fall back to SERVICE_KEYPAIR_PATH for local dev.
+const SERVICE_KEYPAIR_ENV = process.env.SERVICE_KEYPAIR;
 const SERVICE_KEYPAIR_PATH =
   process.env.SERVICE_KEYPAIR_PATH ??
   `${process.env.HOME}/.config/solana/id-devnet.json`;
@@ -99,11 +103,30 @@ async function loadDelegateSigner(record: AgentRecord) {
 let serviceSignerCache: Awaited<
   ReturnType<typeof createKeyPairSignerFromBytes>
 > | null = null;
+function parseKeypairJson(raw: string, source: string): Uint8Array {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`service keypair (${source}) is not valid JSON: ${err}`);
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 64) {
+    throw new Error(
+      `service keypair (${source}) must be a JSON array of 64 bytes, got ${
+        Array.isArray(parsed) ? `length ${parsed.length}` : typeof parsed
+      }`
+    );
+  }
+  return new Uint8Array(parsed as number[]);
+}
 async function loadServiceSigner() {
   if (serviceSignerCache) return serviceSignerCache;
-  const bytes = new Uint8Array(
-    JSON.parse(readFileSync(SERVICE_KEYPAIR_PATH, "utf-8"))
-  );
+  const bytes = SERVICE_KEYPAIR_ENV
+    ? parseKeypairJson(SERVICE_KEYPAIR_ENV, "SERVICE_KEYPAIR env")
+    : parseKeypairJson(
+        readFileSync(SERVICE_KEYPAIR_PATH, "utf-8"),
+        SERVICE_KEYPAIR_PATH
+      );
   serviceSignerCache = await createKeyPairSignerFromBytes(bytes);
   return serviceSignerCache;
 }
@@ -261,7 +284,13 @@ app.post("/agents/:id/pay", async (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log(`✓ onleash backend on http://localhost:${PORT}`);
   console.log(`  RPC:             ${RPC_URL}`);
-  console.log(`  Service keypair: ${SERVICE_KEYPAIR_PATH}`);
+  console.log(
+    `  Service keypair: ${
+      SERVICE_KEYPAIR_ENV
+        ? "SERVICE_KEYPAIR env (inline)"
+        : SERVICE_KEYPAIR_PATH
+    }`
+  );
   console.log(
     `  Delegate mode:   ${
       process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
