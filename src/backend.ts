@@ -17,6 +17,7 @@ import {
   findAssociatedTokenPda,
   TOKEN_PROGRAM_ADDRESS,
 } from "@solana-program/token";
+import cors from "cors";
 import express, { type Request, type Response } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -52,6 +53,14 @@ const SERVICE_KEYPAIR_PATH =
   process.env.SERVICE_KEYPAIR_PATH ??
   `${process.env.HOME}/.config/solana/id-devnet.json`;
 const PORT = Number(process.env.PORT ?? 3000);
+// Comma-separated origins permitted to call this API. Set to "*" to allow any.
+const CORS_ORIGINS = (
+  process.env.CORS_ORIGINS ??
+  "http://localhost:3000,https://onleash.io,https://app.onleash.io"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const rpc = createSolanaRpc(RPC_URL);
 const rpcSubscriptions = createSolanaRpcSubscriptions(RPC_WS);
@@ -132,6 +141,12 @@ async function loadServiceSigner() {
 }
 
 const app = express();
+app.use(
+  cors({
+    origin: CORS_ORIGINS.includes("*") ? true : CORS_ORIGINS,
+    methods: ["GET", "POST", "OPTIONS"],
+  })
+);
 app.use(express.json());
 
 app.get("/health", (_req: Request, res: Response) => {
@@ -291,6 +306,7 @@ app.listen(PORT, () => {
         : SERVICE_KEYPAIR_PATH
     }`
   );
+  console.log(`  CORS origins:    ${CORS_ORIGINS.join(", ")}`);
   console.log(
     `  Delegate mode:   ${
       process.env.PRIVY_APP_ID && process.env.PRIVY_APP_SECRET
